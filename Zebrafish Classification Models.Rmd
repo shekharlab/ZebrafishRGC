@@ -1,0 +1,194 @@
+---
+title: "Zebrafish Classification Model"
+output: html_notebook
+---
+
+
+```{r}
+# Set directory path
+dir_path <- "~/Google Drive File Stream/My Drive/Manuscript - Zebrafish RGC Atlas/Analysis/Analysis2020/"
+setwd(dir_path)
+
+# Load Packages
+library(dplyr)
+library(reshape2)
+library(ggplot2)
+source("utils/utilFxns.R") # Some useful functions imported from sc.R
+source("utils/plottingFxns.R") # Some useful plotting functions
+require(xgboost)
+source("utils/xgboost_train.R")
+library(ggplot2)
+```
+
+Load in adult, full larva, immature larva, and mature larva objects. Change all gene names to uppercase.
+```{r}
+# Read in final objects
+adult <- readRDS("../Objects2020/adult_zFish_object.rds")
+larva <- readRDS("../Objects2020/larva_zFish_object.rds")
+mature <- readRDS("../Objects2020/mature_zFish_object.rds")
+immature <- readRDS("../Objects2020/immature_zFish_object.rds")
+
+# Change genes to uppercase
+adult <- UpperCase_genes(adult, integration = TRUE)
+larva <- UpperCase_genes(larva)
+mature <- UpperCase_genes(mature)
+immature <- UpperCase_genes(immature)
+```
+
+Set variable genes to train the learning model
+```{r}
+# Load variably expressed genes
+adult.markers = readRDS("../Objects2020/adult_ClusterMarkers")
+larva.markers = readRDS("../Objects2020/larva_ClusterMarkers")
+
+# Only use genes with a significance level of p < 1e-10
+larva_var.genes = unique(subset(larva.markers, p_val<1e-10))
+adult_var.genes = unique(subset(adult.markers, p_val<1e-10))
+genes.use = intersect(toupper(adult_var.genes$gene), toupper(larva_var.genes$gene))
+print(head(genes.use, 30))
+```
+
+Train a classification model for mature larva clusters
+```{r, eval=FALSE}
+mature_model <- TrainModel(object = mature, training_genes = genes.use, do.scale = TRUE)
+saveRDS(mature_model, "../Objects2020/mature_model")
+```
+
+```{r, echo = FALSE}
+mature_model <- readRDS("../Objects2020/mature_model")
+adult@active.assay <- "integrated"
+```
+
+Test adult cells using the mature larva classifier and generate a confusion matrix to summarize the results.
+```{r}
+adult_to_mature <- BuildConfusionMatrix(train = mature, test = adult, model = mature_model, scale.by.model = FALSE)
+MakePrettyConfusionMatrix(adult_to_mature)
+```
+
+Identify one to one mappings
+```{r}
+# Create scaled row and column matrices
+row_scale_mat <- adult_to_mature / rowSums(adult_to_mature)
+col_scale_mat <- apply(adult_to_mature, 2, function(x) x/sum(x))
+
+# Identify adult clusters that map strongly to a single larva cluster
+# (at least 60% of the adult cluster must map to a single larva cluster)
+adult_max <- which(apply(row_scale_mat, 1, max) > .6)
+larva_max <- sapply(adult_max, function(x) which.max(row_scale_mat[x,]))
+larva_max <- colnames(row_scale_mat)[larva_max]
+
+# Remove mappings that aren't unique
+unique_larva_max <- vector()
+i <- 1
+for(c in 1:length(larva_max)){
+  cluster <- larva_max[c]
+  remaining_clusters <- larva_max[-c]
+  if(!(cluster %in% remaining_clusters)){
+    unique_larva_max[i] = cluster
+    i = i+1
+  }
+}
+
+# Verify larval clusters map strongly to a single adult cluster
+# (no more than one adult cluster accounts for 20% of the mappings to the larva cluster)
+col_num_mappings <- apply(col_scale_mat, 2, function(x) sum(x>.20))
+unique_larva_map <- names(which(col_num_mappings == 1))
+
+# Identify overlap
+larva_unique <- unique_larva_max[unique_larva_max %in% unique_larva_map]
+
+# Remove larva cluster 8, as it does not seem to be one-to-one from the confusion matrix
+larva_unique <- larva_unique[-which(larva_unique == "8")]
+
+# Print final mappings
+adult_unique <- names(adult_max[larva_max %in% larva_unique])
+for(i in 1:length(larva_unique)){
+  print(paste0("Adult cluster ", adult_unique[i], " maps to larva cluster ", larva_unique[i]))
+
+}
+```
+
+Create a new object that only contains 1:1 matches between larva and adult
+```{r}
+# Subset data to only include one to one matches
+larva_subset <- subset(larva, idents = c("9","10", "18","19", "21","23"))
+larva_subset@meta.data$stage <- "larva"
+larva_subset@meta.data$tag <- paste0("larva", larva_subset@meta.data$clusterID)
+
+adult_subset <- subset(adult, idents = c("7","12", "16","21","29","31"))
+adult_subset@meta.data$stage <- "adult"
+adult_subset@meta.data$tag <- paste0("adult", adult_subset@meta.data$clusterID)
+
+allFish <- merge(larva_subset, y = adult_subset, project = "zFish")
+Idents(allFish) <- "tag"
+allFish <- NormalizeData(allFish, normalization.method = "LogNormalize", scale.factor = 10000)
+allFish <- FindVariableFeatures(allFish, selection.method = "vst", nfeatures = 2000)
+allFish <- ScaleData(allFish, verbose = FALSE)
+
+allFish@meta.data$match_num <- "TEST"
+allFish@meta.data$match <- "TEST"
+allFish@meta.data[WhichCells(allFish, idents = "adult7"),]$match_num <- "1_adult"
+allFish@meta.data[WhichCells(allFish, idents = "larva9"),]$match_num <- "1_larva"
+allFish@meta.data[WhichCells(allFish, idents = "adult12"),]$match_num <- "2_adult"
+allFish@meta.data[WhichCells(allFish, idents = "larva10"),]$match_num <- "2_larva"
+allFish@meta.data[WhichCells(allFish, idents = "adult16"),]$match_num <- "3_adult"
+allFish@meta.data[WhichCells(allFish, idents = "larva19"),]$match_num <- "3_larva"
+allFish@meta.data[WhichCells(allFish, idents = "adult21"),]$match_num <- "4_adult"
+allFish@meta.data[WhichCells(allFish, idents = "larva23"),]$match_num <- "4_larva"
+allFish@meta.data[WhichCells(allFish, idents = "adult29"),]$match_num <- "5_adult"
+allFish@meta.data[WhichCells(allFish, idents = "larva21"),]$match_num <- "5_larva"
+allFish@meta.data[WhichCells(allFish, idents = "adult31"),]$match_num <- "6_adult"
+allFish@meta.data[WhichCells(allFish, idents = "larva18"),]$match_num <- "6_larva"
+allFish@meta.data$match <- substr(allFish@meta.data$match_num, 1,1)
+```
+
+Identify pair specific markers and verify shared expression
+```{r}
+# Find differentiating markers of one to one matches
+Idents(allFish) <- "match"
+DE_matches <- FindAllMarkers(allFish)
+
+# Extract the top 3 DE genes and plot them
+match_genes <- vector()
+for(i in 1:length(cluster_marker_list)){
+  match_genes = union(match_genes, subset(DE_matches, cluster == i)[1:3,]$gene)
+}
+
+DotPlot(allFish, features = match_genes, group.by = "match_num") + RotatedAxis()
+```
+
+
+Identify DE genes globally associated with maturation
+```{r}
+# Set idents to stage and find all markers
+Idents(allFish) <- "stage"
+global_markers <- FindMarkers(allFish, ident.1 = "adult", ident.2="larva", max.cells.per.ident = 1000)
+
+# Define a gene as globally expressed if logFC > 1 and is pct1 or pct2 is greater than .5
+avg_logFC_threshold <- 1
+pct_threshold <- .5
+
+global_DEgenes_mat <- global_markers[abs(global_markers[,"avg_logFC"]) > avg_logFC_threshold,]
+global_DEgenes <- rownames(global_DEgenes_mat[(global_DEgenes_mat[,"pct.1"] > pct_threshold) | (global_DEgenes_mat[,"pct.2"] > pct_threshold), ])
+
+# Sort genes based on order of avg_logFC
+global_DEgenes_mat <- global_DEgenes_mat[global_DEgenes,]
+gene_order <- sort(global_DEgenes_mat$avg_logFC, index.return = TRUE)$ix
+global_DEgenes <- global_DEgenes[gene_order]
+
+# Generate a heat map showing differences in gene expression
+DoHeatmap(object = allFish, features = global_DEgenes, group.by = "stage")
+```
+
+
+Train a classification model for immature larva clusters
+```{r, eval=FALSE}
+immature_model <- TrainModel(object = immature, training_genes = genes.use, do.scale = TRUE)
+saveRDS(immature_model, "../Objects2020/immature_model")
+```
+
+Test mature larva cells using the immature larva classifier and generate a confusion matrix to summarize the results.
+```{r}
+mature_to_immature <- BuildConfusionMatrix(train = immature, test = mature, model = immature_model, scale.by.model = FALSE)
+MakePrettyConfusionMatrix(mature_to_immature)
+```
