@@ -236,11 +236,11 @@ plotConfusionMatrix = function(X,row.scale=TRUE, col.scale=FALSE, col.low="blue"
 #' @param title.use Main title
 #' @param col.low Color to use for low values
 #' @param col.high Color to use for high values
-#'
+#' @param order Whether to return the order of clusters plotted on the x axis
 #' @return A confusion matrix plot as well as the row order
 MakePrettyConfusionMatrix = function(C, xlab.use = "Training clusters", ylab.use = "Test clusters",
                                      title.use = "Performance Confusion Matrix", col.high = "darkblue",
-                                     col.low = "white"){
+                                     col.low = "white", order = FALSE){
   library(gplots)
   hc <- heatmap.2(C,hclustfun = function(x) hclust(x,method="single"))
   C1=C[hc$rowInd, hc$colInd]
@@ -249,7 +249,10 @@ MakePrettyConfusionMatrix = function(C, xlab.use = "Training clusters", ylab.use
   row.ord = names(sort(row.max))
   
   plotConfusionMatrix(C1[row.ord,], xlab.use = xlab.use, ylab.use = ylab.use, col.high = col.high, col.low = col.low)
-  return(row.ord)
+  
+  if(order){
+    return(row.ord)
+  }
 }
 
 
