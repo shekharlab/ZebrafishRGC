@@ -1,10 +1,17 @@
 ---
 title: "Exploring Gene Expression"
-output: html_notebook
+output:
+  html_document:
+    df_print: paged
 ---
 
-Load libraries and objects
-```{r}
+## Introduction
+This notebook demonstrates how to identify transcription factors, neuropeptides, and cell surface and adhesion molecules variably expressed in adult and larval RGC clusters. Most of the analysis was run using functionalites within the R package Seurat (Satija et al.,Nature Biotechnology, 2015), an actively maintained set of tools for scRNA-seq analysis (https://satijalab.org/seurat/). `utilFxns.R` and `plottingFxns.R` are scripts containing custom scripts used for analysis and generating figures. These scripts are avaiable in the utils folder at  https://github.com/shekharlab/ZebrafishRGC. 
+
+## Load gene libraries and objects
+
+The first step is to load necessary packages, libraries, and objects. Additionally, convert all gene names to lowercase for consistency and factor clusters according to their dendrograms. 
+```{r, warning=FALSE, message = FALSE}
 # Load libraries
 library(Seurat)
 library(dplyr)
@@ -16,22 +23,59 @@ source("utils/plottingFxns.R")
 # Load objects
 larva <- readRDS("../Objects2020/lar.zFish_Seurat_ClusteredWithPruning_FinalV2_02182020")
 larva = LowerCase_genes(larva)
+Idents(larva) <- "dendro_order"
+
 adult <- readRDS("../Objects2020/zFish_SeuratClusteredIntegratedPruned_FinalV2_021820.rds")
 adult <- LowerCase_genes(adult, integration = TRUE)
 adult@active.assay <- "RNA"  #integrated assay does not contain full gene expression
 Idents(adult) <- "dendro_order"
 ```
 
-Identify transcription factors expressed in larval clusters
-```{r}
-# Read in transcription factors and subset 
+Next, load in respective gene libraries.
+
+```{r, warning=FALSE, message = FALSE}
+# Transcription factors
 tfs = read.csv("../Scripts_Yvonne/ZFIN_Gene_lists/Transcription_Factors.csv", stringsAsFactors = FALSE)$name
-tfs <- tfs[tfs %in% rownames(larva)]
+num_tfs <- length(tfs) 
+
+# Neuropeptides
+nps = read.csv("../Scripts_Yvonne/ZFIN_Gene_lists/NP.csv", stringsAsFactors = FALSE)$name
+num_nps <- length(nps)
+
+# Axon guidance molecules
+axon_guide = read.csv("../Scripts_Yvonne/ZFIN_Gene_lists/Axon_Guidance.csv", stringsAsFactors = FALSE)$name
+# Expand for additional cell surface and adhesion molecules
+gene_all <- unique(c(rownames(larva@assays$RNA), rownames(adult@assays$RNA)))
+CNTN = gene_all[grepl("^cntn",gene_all)] #Contactins
+EPH = gene_all[grepl("^eph",gene_all)] #EphRs
+EFN = gene_all[grepl("^efn",gene_all)] #Ephrins
+ROBO = gene_all[grepl("^robo",gene_all)] #Robos
+SLIT = gene_all[grepl("^slit",gene_all)] #Slits
+SEMA = gene_all[grepl("^sema",gene_all)] #Semaphorins
+PLXN = gene_all[grepl("^plx",gene_all)] #Plexins
+NRP = gene_all[grepl("^nrp",gene_all)] #Neuropilins
+CDH = gene_all[grepl("^cdh",gene_all)] #Cadherins
+PCDH = gene_all[grepl("^pcdh",gene_all)] #Protocadherins
+NCAM = gene_all[grepl("^ncam",gene_all)] #Neuronal CAMs
+CADM = gene_all[grepl("^cadm",gene_all)] #Cell adhesion molecule
+LRRTM = gene_all[grepl("^lrrtm",gene_all)] #Leucine-rich repeat transmembrane proteins
+
+RecMol <- unique(c(axon_guide, CNTN, EPH, EFN, ROBO, SLIT, SEMA, PLXN, NRP, CDH, PCDH, NCAM, CADM, LRRTM))
+num_RMs <- length(RecMol)
+```
+
+## Investigating gene expression in larval clusters
+
+Identify transcription factors expressed in larval clusters
+
+```{r, warning=FALSE, message = FALSE}
+# Subset for genes identified in the larva dataset
+tfs_larva <- tfs[tfs %in% rownames(larva)]
 
 # Generate a matrix with each entry corresponding to percent expression of a gene (row) in a cluster (column)
 num_idents <- length(levels(Idents(larva)))
-per_express <- lapply(1:num_idents, function(x) tfPercentExpression(larva, clusID = x, tf=tfs, threshold = 1))
-per_express_mat <- matrix(unlist(per_express), ncol=num_idents, dimnames = list(tfs, 1:num_idents))
+per_express <- lapply(1:num_idents, function(x) tfPercentExpression(larva, clusID = x, tf=tfs_larva, threshold = 1))
+per_express_mat <- matrix(unlist(per_express), ncol=num_idents, dimnames = list(tfs_larva, 1:num_idents))
 
 # Define different types of markers based on the percentage of cells expressing a given gene
 percentage_expressing <- .3
@@ -43,16 +87,16 @@ plot_TFs <- DiagonalizeGenes(larva_TFs[1:20], larva)
 DotPlot(larva, features = plot_TFs) + RotatedAxis()
 ```
 
-Identify neuropeptides expressed in larval clusters
+Identify neuropeptides expressed in larval clusters.
+
 ```{r}
-# Read in neuropeptides and subset
-nps = read.csv("../Scripts_Yvonne/ZFIN_Gene_lists/NP.csv", stringsAsFactors = FALSE)$name
-nps <- nps[nps %in% rownames(larva)]
+# Subset for genes identified in the larva dataset
+nps_larva <- nps[nps %in% rownames(larva)]
 
 # Generate a matrix with each entry corresponding to percent expression of a gene (row) in a cluster (column)
 num_idents <- length(levels(Idents(larva)))
-per_express <- lapply(1:num_idents, function(x) tfPercentExpression(larva, clusID = x, tf=nps, threshold = 0))
-per_express_mat <- matrix(unlist(per_express), ncol=num_idents, dimnames = list(nps, 1:num_idents))
+per_express <- lapply(1:num_idents, function(x) tfPercentExpression(larva, clusID = x, tf=nps_larva, threshold = 0))
+per_express_mat <- matrix(unlist(per_express), ncol=num_idents, dimnames = list(nps_larva, 1:num_idents))
 
 # Define different types of markers based on the percentage of cells expressing a given gene
 percentage_expressing <- .3
@@ -63,36 +107,17 @@ larva_NPs <- rownames(per_express_mat)[which(num_expressing_clusters > 0)]
 DotPlot(larva, features = DiagonalizeGenes(larva_NPs, larva)) + RotatedAxis()
 ```
 
-Identify cell surface and adhesion molecules expressed in larval clusters
+Identify cell surface and adhesion molecules expressed in larval clusters.
+
 ```{r}
-# Read in axon guidance molecules
-axon_guide = read.csv("../Scripts_Yvonne/ZFIN_Gene_lists/Axon_Guidance.csv", stringsAsFactors = FALSE)$name
-# Search for additional genes in the objects
-gene_all <- unique(c(rownames(larva@assays$RNA), rownames(adult@assays$RNA)))
-CNTN = gene_all[grepl("^cntn",gene_all)] #Contactins
-EPH = gene_all[grepl("^eph",gene_all)] #EphRs
-EFN = gene_all[grepl("^efn",gene_all)] #Ephrins
-ROBO = gene_all[grepl("^robo",gene_all)] #Robos
-SLIT = gene_all[grepl("^slit",gene_all)] #Slits
-SEMA = gene_all[grepl("^sema",gene_all)] #Semaphorins
-PLXN = gene_all[grepl("^plx",gene_all)] #Plexins
-NRP = gene_all[grepl("^nrp",gene_all)] #Neuropilins
-CDH = gene_all[grepl("^cdh",gene_all)] #Cadherins
-PCDH = gene_all[grepl("^pcdh",gene_all)] #Protocadherins
-NCAM = gene_all[grepl("^ncam",gene_all)] #Neuronal CAMs
-CADM = gene_all[grepl("^cadm",gene_all)] #Cell adhesion molecule
-LRRTM = gene_all[grepl("^lrrtm",gene_all)] #Leucine-rich repeat transmembrane proteins
-
-RecMol <- unique(c(axon_guide, CNTN, EPH, EFN, ROBO, SLIT, SEMA, PLXN, NRP, CDH, PCDH, NCAM, CADM, LRRTM))
-
-# Subset genes 
-RecMol <- RecMol[RecMol %in% rownames(larva)]
+# Subset for genes identified in the larva dataset
+RecMol_larva <- RecMol[RecMol %in% rownames(larva)]
 
 
 # Generate a matrix with each entry corresponding to percent expression of a gene (row) in a cluster (column)
 num_idents <- length(levels(Idents(larva)))
-per_express <- lapply(1:num_idents, function(x) tfPercentExpression(larva, clusID = x, tf=RecMol, threshold = 0))
-per_express_mat <- matrix(unlist(per_express), ncol=num_idents, dimnames = list(RecMol, 1:num_idents))
+per_express <- lapply(1:num_idents, function(x) tfPercentExpression(larva, clusID = x, tf=RecMol_larva, threshold = 0))
+per_express_mat <- matrix(unlist(per_express), ncol=num_idents, dimnames = list(RecMol_larva, 1:num_idents))
 
 # Define different types of markers based on the percentage of cells expressing a given gene
 percentage_expressing <- .3
@@ -104,21 +129,18 @@ DotPlot(larva, features = DiagonalizeGenes(larva_RMs[1:20], larva)) + RotatedAxi
 
 ```
 
-Identify transcription factors expressed in adult clusters
+## Investigating gene expression in adult clusters
+
+Identify transcription factors expressed in adult clusters.
+
 ```{r}
-# Read in transcription factors
-tfs = read.csv("../Scripts_Yvonne/ZFIN_Gene_lists/Transcription_Factors.csv", stringsAsFactors = FALSE)$name
-
-# Count number of tfs
-num_tfs <- length(tfs) 
-
-# Subset transcription factors
-tfs <- tfs[tfs %in% rownames(adult)]
+# Subset for genes identified in the adult dataset
+tfs_adult <- tfs[tfs %in% rownames(adult)]
 
 # Generate a matrix with each entry corresponding to percent expression of a gene (row) in a cluster (column)
 num_idents <- length(levels(Idents(adult)))
-per_express <- lapply(1:num_idents, function(x) tfPercentExpression(adult, clusID = x, tf=tfs, threshold = 0))
-per_express_mat <- matrix(unlist(per_express), ncol=num_idents, dimnames = list(tfs, 1:num_idents))
+per_express <- lapply(1:num_idents, function(x) tfPercentExpression(adult, clusID = x, tf=tfs_adult, threshold = 0))
+per_express_mat <- matrix(unlist(per_express), ncol=num_idents, dimnames = list(tfs_adult, 1:num_idents))
 
 # Define different types of markers based on the percentage of cells expressing a given gene
 percentage_expressing <- .3
@@ -129,21 +151,16 @@ adult_TFs <- rownames(per_express_mat)[which(num_expressing_clusters > 0)]
 DotPlot(adult, features = DiagonalizeGenes(adult_TFs[1:20], adult)) + RotatedAxis()
 ```
 
-Identify neuropeptides expressed in adult clusters
+Identify neuropeptides expressed in adult clusters.
+
 ```{r}
-# Read in neuropeptides
-nps = read.csv("../Scripts_Yvonne/ZFIN_Gene_lists/NP.csv", stringsAsFactors = FALSE)$name
-
-# Count number of nps
-num_nps <- length(nps)
-
-# Subset genes
-nps <- nps[nps %in% rownames(adult)]
+# Subset for genes identified in the adult dataset
+nps_adult <- nps[nps %in% rownames(adult)]
 
 # Generate a matrix with each entry corresponding to percent expression of a gene (row) in a cluster (column)
 num_idents <- length(levels(Idents(adult)))
-per_express <- lapply(1:num_idents, function(x) tfPercentExpression(adult, clusID = x, tf=nps, threshold = 1))
-per_express_mat <- matrix(unlist(per_express), ncol=num_idents, dimnames = list(nps, 1:num_idents))
+per_express <- lapply(1:num_idents, function(x) tfPercentExpression(adult, clusID = x, tf=nps_adult, threshold = 1))
+per_express_mat <- matrix(unlist(per_express), ncol=num_idents, dimnames = list(nps_adult, 1:num_idents))
 
 # Define different types of markers based on the percentage of cells expressing a given gene
 percentage_expressing <- .3
@@ -154,40 +171,16 @@ adult_NPs <- rownames(per_express_mat)[which(num_expressing_clusters > 0)]
 DotPlot(adult, features = DiagonalizeGenes(adult_NPs, adult)) + RotatedAxis()
 ```
 
-Identify cell surface and adhesion molecules expressed in adult clusters
+Identify cell surface and adhesion molecules expressed in adult clusters.
+
 ```{r}
-##########################  Adult Recognition Molecules   #############################################
-# Read in axon guidance molecules
-axon_guide = read.csv("../Scripts_Yvonne/ZFIN_Gene_lists/Axon_Guidance.csv", stringsAsFactors = FALSE)$name
-
-# Search for additional genes in the objects
-gene_all <- unique(c(rownames(larva@assays$RNA), rownames(adult@assays$RNA)))
-CNTN = gene_all[grepl("^cntn",gene_all)] #Contactins
-EPH = gene_all[grepl("^eph",gene_all)] #EphRs
-EFN = gene_all[grepl("^efn",gene_all)] #Ephrins
-ROBO = gene_all[grepl("^robo",gene_all)] #Robos
-SLIT = gene_all[grepl("^slit",gene_all)] #Slits
-SEMA = gene_all[grepl("^sema",gene_all)] #Semaphorins
-PLXN = gene_all[grepl("^plx",gene_all)] #Plexins
-NRP = gene_all[grepl("^nrp",gene_all)] #Neuropilins
-CDH = gene_all[grepl("^cdh",gene_all)] #Cadherins
-PCDH = gene_all[grepl("^pcdh",gene_all)] #Protocadherins
-NCAM = gene_all[grepl("^ncam",gene_all)] #Neuronal CAMs
-CADM = gene_all[grepl("^cadm",gene_all)] #Cell adhesion molecule
-LRRTM = gene_all[grepl("^lrrtm",gene_all)] #Leucine-rich repeat transmembrane proteins
-
-RecMol <- unique(c(axon_guide, CNTN, EPH, EFN, ROBO, SLIT, SEMA, PLXN, NRP, CDH, PCDH, NCAM, CADM, LRRTM))
-
-# Count the number of RMs
-num_RMs <- length(RecMol)
-
-# Subset genes 
-RecMol <- RecMol[RecMol %in% rownames(adult)]
+# Subset for genes identified in the adult dataset
+RecMol_adult <- RecMol[RecMol %in% rownames(adult)]
 
 # Generate a matrix with each entry corresponding to percent expression of a gene (row) in a cluster (column)
 num_idents <- length(levels(Idents(adult)))
-per_express <- lapply(1:num_idents, function(x) tfPercentExpression(adult, clusID = x, tf=RecMol, threshold = 0))
-per_express_mat <- matrix(unlist(per_express), ncol=num_idents, dimnames = list(RecMol, 1:num_idents))
+per_express <- lapply(1:num_idents, function(x) tfPercentExpression(adult, clusID = x, tf=RecMol_adult, threshold = 0))
+per_express_mat <- matrix(unlist(per_express), ncol=num_idents, dimnames = list(RecMol_adult, 1:num_idents))
 
 # Define different types of markers based on the percentage of cells expressing a given gene
 percentage_expressing <- .3
@@ -198,14 +191,16 @@ adult_RMs <- rownames(per_express_mat)[which(num_expressing_clusters > 0)]
 DotPlot(adult, features = DiagonalizeGenes(adult_RMs[1:20], adult)) + RotatedAxis()
 ```
 
+## Hyper geometric test
+
 Calculate the probability that shared gene expression between larval and adult is random using the hypergeometric test.
+
 ```{r}
 TF_p_val <- phyper(q = sum(as.numeric(adult_TFs %in% larva_TFs)), m = length(larva_TFs), n = num_tfs - length(larva_TFs), k = length(adult_TFs), lower.tail = FALSE)
 print(paste0("Transcription factor p-val: ", TF_p_val))
 
 NP_p_val <- phyper(q = sum(as.numeric(adult_NPs %in% larva_NPs)), m = length(larva_NPs), n = num_nps - length(larva_NPs), k = length(adult_NPs), lower.tail = FALSE)
 print(paste0("Neuropeptide p-val: ", NP_p_val))
-
 
 RM_p_val <- phyper(q = sum(as.numeric(adult_RMs %in% larva_RMs)), m = length(larva_RMs), n = num_RMs - length(larva_RMs), k = length(adult_RMs), lower.tail = FALSE)
 print(paste0("Recognition molecule p-val: ", RM_p_val))

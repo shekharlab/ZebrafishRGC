@@ -1,45 +1,65 @@
 ---
 title: "Larva Zebrafish Clustering"
-output: html_notebook
+output: html_document
 ---
 
-Set directory path and load libraries 
-```{r}
-# Set directory path
-dir_path <- "~/Google Drive File Stream/My Drive/Manuscript - Zebrafish RGC Atlas/Analysis/Analysis2020/"
-setwd(dir_path)
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(tidy.opts=list(width.cutoff=60),tidy=TRUE)
+```
 
-# Load libraries
+## Introduction
+This notebook is intended to guide users through some of the major portions of analysis completed for clustering of larval zebrafish retinal ganglion cells. Most of the analysis was run using functionalites within the R pacakge Seurat (Satija et al.,Nature Biotechnology, 2015), an actively maintained set of tools for scRNA-seq analysis (https://satijalab.org/seurat/). `utilFxns.R` and `plottingFxns.R` are scripts containing custom scripts used for analysis and generating figures. These scripts are avaiable in the utils folder at  https://github.com/shekharlab/ZebrafishRGC. 
+
+## Preprocessing
+
+The first step is to load necessary packages and libraries.
+
+```{r, warning=FALSE, message = FALSE}
 library(Seurat)
 library(dplyr)
 library(reshape2)
 library(ggplot2)
 library(cowplot)
-library(cluster, quietly = TRUE)
+library(cluster)
 source("utils/utilFxns.R")
 source("utils/plottingFxns.R")
-
 ```
 
-Create the initial Seurat object by loading the Count matrix and set batch information
-```{r, error=FALSE, message=FALSE}
+Next, we create the initial Seurat object by loading the Count matrix. Count matrices are currently available at https://drive.google.com/drive/folders/1baRKtDkD4d8-6tG8P9v8VcjtUDpWeq5m?usp=sharing, but will later be avaiable from the Gene Expression Omnibus. The Count matrix is subsetted to remove a faulty sample and then used to create a Seurat object.
+
+```{r, warning=FALSE, message=FALSE}
 # Load larval zebrafish count matrix
+Count.mat <- readRDS("../CountMatrices/ConsolidatedCounts_Zfish_013020.rds")
+
 Count.mat <- readRDS("../CountMatrices/ConsolidatedCounts_LarvaZFish_02032020")
 
 # Remove ZfishRGC17 due to wetting sample failure
 cells.remove = grep("ZfishRGC17_",colnames(Count.mat), value=TRUE)
 Count.mat = Count.mat[, setdiff(colnames(Count.mat), cells.remove)]
 
-# Create Seurat object
+# Create Seurat object, removing genes that are expressed in fewer than 25 cells and removing cells
+# that have fewer than 450 features
 larva <- CreateSeuratObject(counts = Count.mat, project = "larvaRGC", min.cells = 25, min.features = 450)
+```
 
-# Check QC metrics
+Check quality metrics of the data, including RNA counts and mitochondrial scores.
+
+```{r, warning=FALSE, message=FALSE}
 larva[["percent.mt"]] <- PercentageFeatureSet(larva, pattern = "^MT-")
 larva[["percent.rps"]] <- PercentageFeatureSet(larva, pattern = "^RPS")
 larva[["percent.rpl"]] <- PercentageFeatureSet(larva, pattern = "^RPL")
 larva[["percent.rp"]] <- larva[["percent.rps"]] + larva[["percent.rpl"]]
-VlnPlot(larva, features = c("nCount_RNA", "percent.mt", "percent.rp"))
 
+# Create Violin Plots of RNA counts, mitochondrial percentages, and ribosomal percentages
+VlnPlot(larva, features = "nCount_RNA", pt.size = .3)
+VlnPlot(larva, features = "percent.mt", pt.size = .3)
+VlnPlot(larva, features = "percent.rp", pt.size = .3)
+```
+
+Set batch information.
+
+```{r, warning=FALSE, message=FALSE}
 # Change the order of factor
 larva@meta.data$orig.ident = factor(larva@meta.data$orig.ident, levels = paste0("ZfishRGC",c(18:20)))
 
@@ -50,78 +70,100 @@ batchid[grep("ZfishRGC18", batchname)] = "Batch1"
 batchid[grep("ZfishRGC19", batchname)] = "Batch2"
 batchid[grep("ZfishRGC20", batchname)] = "Batch3"
 larva@meta.data$batch = factor(batchid)
+
 table(larva@meta.data$orig.ident, larva@meta.data$batch)
 ```
 
-Cluster the data using functionalities within Seurat. Check for batch effects.
+## Clustering 
+
+Using functionalities within Seurat, cluster the dataset. The data is first log-normalized and then all genes are scaled. The top 2000 variable genes are then detected and used to run PCA. The top 30 principle components were selected using an elbow plot to calculate cluster assignments.
+
 ```{r, warning=FALSE, message=FALSE}
 # Log normalize the data, identify the top 2000 variable features, and scale all genes
 larva <- NormalizeData(larva, normalization.method = "LogNormalize", scale.factor = 10000)
-larva <- FindVariableFeatures(larva, selection.method = "vst", nfeatures = 2000)
 all.genes <- rownames(larva)
 larva <- ScaleData(larva, features = all.genes)
 
-# Run PCA on variable features and visualize the dimensionality of the dataset using an elbow plot
+# Identify and run PCA on variable features and visualize the dimensionality of the dataset using an elbow plot
+larva <- FindVariableFeatures(larva, selection.method = "vst", nfeatures = 2000)
 larva <- RunPCA(larva, features = VariableFeatures(object = larva))
-DimPlot(larva, reduction = "pca")
+
 ElbowPlot(larva, ndims = 50)
 
 # Find nearest neighbors using 30 PCs and cluster the cells. Visualize using tSNE and UMAP
 larva <- FindNeighbors(larva, dims = 1:30)
 larva <- FindClusters(larva, resolution = .5)
+
 larva <- RunTSNE(larva, dims = 1:30)
 larva <- RunUMAP(larva, dims = 1:30)
+
+# Visualize clusters
 DimPlot(larva, reduction = "tsne")
 DimPlot(larva, reduction =  "umap")
+```
 
-# Check for batch effects
+Check for batch effects within the data by grouping the tSNE plot by batch.
+
+```{r, warning=FALSE, message=FALSE}
 DimPlot(larva, reduction = "tsne", group.by = "orig.ident", cells = sample(colnames(larva)))
 ```
 
-Investigate cluster markers and remove contaminant cell types
-```{r, warning=FALSE, message=FALSE}
-# Prune some clusters to remove contaminant cell types 
-# 17 - Amacrine cell (TFAP2B)
-# 21 - Amacrine cell (GAD1B, GAD2, SLC6A1B)
-# 22 - Photoreceptor (PDE6G, SAGB)
-# 23 - Photoreceptor (PDE6H, ARR3A, RBP4L)
+Investigate expression of canonical RGC markers to check for contaminant cell types.
+
+```{r, warning=FALSE, message=FALSE, fig.width = 10}
 VlnPlot(larva,"nFeature_RNA", pt.size=0)
 VlnPlot(larva,"RBPMS2B", pt.size=0)
-markers17=FindMarkers(larva, ident.1 = 17, test.use="MAST", max.cells.per.ident = 1000)
-markers21=FindMarkers(larva, ident.1 = 21, test.use="MAST", max.cells.per.ident = 1000)
-markers22=FindMarkers(larva, ident.1 = 22, test.use="MAST", max.cells.per.ident = 1000)
-markers23=FindMarkers(larva, ident.1 = 23, test.use="MAST", max.cells.per.ident = 1000)
+```
 
-# Remove contaminant cell types
+Investigate cluster markers thought to be contaminants.
+
+```{r, warning=FALSE, message=FALSE, eval=FALSE}
+# 17 - Amacrine cell (TFAP2B)
+markers17=FindMarkers(larva, ident.1 = 17, test.use="MAST", max.cells.per.ident = 1000)
+# 21 - Amacrine cell (GAD1B, GAD2, SLC6A1B)
+markers21=FindMarkers(larva, ident.1 = 21, test.use="MAST", max.cells.per.ident = 1000)
+# 22 - Photoreceptor (PDE6G, SAGB)
+markers22=FindMarkers(larva, ident.1 = 22, test.use="MAST", max.cells.per.ident = 1000)
+# 23 - Photoreceptor (PDE6H, ARR3A, RBP4L)
+markers23=FindMarkers(larva, ident.1 = 23, test.use="MAST", max.cells.per.ident = 1000)
+```
+
+Remove contaminant cell types.
+
+```{r, warning=FALSE, message=FALSE}
 cells.remove = WhichCells(larva, idents= c(17, 21, 22, 23))
 larva = SubsetData(larva,cells = setdiff(colnames(larva), cells.remove))
 ```
 
 
-Since a large number of cells were removed, repeat clustering steps. 
+Since a large number of cells were removed, repeat clustering steps using the standard workflow.
 ```{r, error=FALSE, message=FALSE}
-# Run the standard workflow for visualization and clustering using the integrated data
 larva <- NormalizeData(larva, normalization.method = "LogNormalize", scale.factor = 10000)
 larva <- FindVariableFeatures(larva, selection.method = "vst", nfeatures = 2000)
 larva <- ScaleData(larva, verbose = FALSE)
+
 larva <- RunPCA(larva, npcs = 40, verbose = FALSE)
+
+larva <- FindNeighbors(larva, dims = 1:40)
+larva <- FindClusters(larva)
+
 larva <- RunUMAP(larva, reduction = "pca", dims = 1:40)
 larva <- RunTSNE(larva, reduction = "pca", dims = 1:40)
-larva <- FindNeighbors(larva, dims = 1:40)
-larva <- FindClusters(larva) #Run Louvain algorithm
 ```
 
+Identify all variable features.
+
 ```{r, error=FALSE, message=FALSE}
-# Identify all variable features
 lar.markers <- FindAllMarkers(larva, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
 lar.markers %>% group_by(cluster) %>% top_n(n = 1, wt = avg_logFC)
+```
 
-# Remove remaining any non valid clusters
+Remove remaining any non valid clusters and set final cluster assignments.
+
+```{r, error=FALSE, message=FALSE}
 # Cluster 5: Lacks of unique differentially expressed genes
-# Cluster 28: Muller Glia (RLBP1A, APOEB)
 head(subset(lar.markers, cluster == 5))
-VlnPlot(larva, "KCNIP3B", pt.size = 0)
-VlnPlot(larva, "CALB2A", pt.size = 0)
+# Cluster 28: Muller Glia (RLBP1A, APOEB)
 VlnPlot(larva, "RLBP1A", pt.size = 0)
 
 # Remove clusters
@@ -136,11 +178,14 @@ Idents(larva) <- "clusterID"
 ```
 
 Construct dendrogram based on hierarchical clustering and reorder clusters.
-```{r}
+
+```{r, error=FALSE, message=FALSE,fig.height=10, fig.width=10}
 # Build dendrogram
 Idents(larva) <- "clusterID"
 larva <- FindVariableFeatures(larva, selection.method = "vst", nfeatures = 500)
 larva <- BuildClusterTree(larva)
+
+# Visualize the dendrogram
 PlotClusterTree(larva)
 plot(larva@tools$BuildClusterTree)
 
@@ -151,28 +196,20 @@ right_clusts = Seurat:::GetRightDescendants(tree_obj, length(levels(larva@meta.d
 clust_order = c(left_clusts, right_clusts)
 larva@meta.data$dendro_order = factor(larva@meta.data$clusterID, levels = clust_order)
 Idents(larva) <- "dendro_order"
-
-# Save larval object
-saveRDS(larva, "../Objects2020/larva_zFish_object.rds")
 ```
+
+## Visualize the data
 
 Identify all variable features
-```{r}
+```{r, error=FALSE, message=FALSE}
 lar.markers <- FindAllMarkers(larva, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
-saveRDS(lar.markers, "../Objects2020/larva_ClusterMarkers")
 ```
 
-Create Dot Plots for DE genes, globally expressed genes, and genes expressed in mature / immature clusters.
-```{r}
-# Extract top 3 DE genes from each cluster for plotting
-DEGenes_vector <- vector()
-for(i in levels(Idents(larva))){
-  DEGenes_vector = union(DEGenes_vector, head(subset(lar.markers, cluster==i))[1:3,]$gene)
-}
-DEGenes_vector = tolower(DEGenes_vector[2:length(DEGenes_vector)])
+Plot canonical RGC markers as well as markers that differentiate immature and mature clusters.
+
+```{r, error=FALSE, message=FALSE, fig.width=4}
+# Convert gene names to lowercase
 larva <- LowerCase_genes(larva)
-# Plot DE genes
-DotPlot(larva, features = DEGenes_vector) + RotatedAxis()
 
 # Plot canonical RGC markers
 DotPlot(larva, features = tolower(c("ROBO2", "ISL2B", "RBPMS2B"))) + RotatedAxis()
@@ -181,17 +218,34 @@ DotPlot(larva, features = tolower(c("ROBO2", "ISL2B", "RBPMS2B"))) + RotatedAxis
 DotPlot(larva, features = c("aldocb","bhlhe41","fam107b","bhlhe40","tmsb","alcamb","tubb5","fam60al")) + RotatedAxis()
 ```
 
+Create Dot Plots for DE genes, globally expressed genes, and genes expressed in mature / immature clusters.
+
+```{r, fig.width=14}
+# Extract top 3 DE genes from each cluster for plotting
+DEGenes_vector <- vector()
+for(i in levels(Idents(larva))){
+  DEGenes_vector = union(DEGenes_vector, head(subset(lar.markers, cluster==i))[1:3,]$gene)
+}
+DEGenes_vector = tolower(DEGenes_vector[2:length(DEGenes_vector)])
+larva <- LowerCase_genes(larva)
+
+# Plot DE genes
+DotPlot(larva, features = DEGenes_vector) + RotatedAxis()
+```
+
+## Split into immature and mature larva objects
 
 Subset the larval dataset into mature and immature cells based on cluster identity.
+
 ```{r, message=FALSE, error=FALSE}
 # Split larva into immature cells
 immature_clusts = c("1","2","3","5","13","20")
 immature_cells <- WhichCells(larva, idents =immature_clusts)
 
-# Create new Seurat object for immature cells
+# Create new Seurat object for immature cells. ClusterSeurat is a shortcut function that goes through the normal workflow.
 immature <- CreateSeuratObject(Count.mat[,immature_cells])
-# ClusterSeurat is a shortcut function that goes through the normal workflow
 immature <- ClusterSeurat(immature)
+
 # Import cluster ID from full larva object
 immature@meta.data$orig_ID <- 0
 immature@meta.data[immature_cells,]$orig_ID = as.numeric(larva@meta.data[immature_cells,]$clusterID)
@@ -199,7 +253,8 @@ levels(immature@meta.data$orig_ID) <- as.numeric(immature_clusts)
 Idents(immature) <- "orig_ID"
 ```
 
-Create Seurat object for mature cells
+Create Seurat object for mature cells.
+
 ```{r}
 # Subset larva object
 mature_clusts = setdiff(levels(larva@meta.data$clusterID), immature_clusts)
@@ -208,6 +263,7 @@ mature_cells <- WhichCells(larva, idents = mature_clusts)
 # Create separate object
 mature <- CreateSeuratObject(Count.mat[,mature_cells])
 mature <- ClusterSeurat(mature)
+
 # Import cluster IDs from full larval object
 mature@meta.data$orig_ID <- 0
 mature@meta.data[mature_cells,]$orig_ID <- as.numeric(larva@meta.data[mature_cells,]$clusterID)
@@ -221,7 +277,8 @@ DimPlot(immature, reduction = "tsne", group.by = "orig_ID")
 DimPlot(mature, reduction = "tsne", group.by = "orig_ID")
 ```
 
-Calculate silhoutette scores for immature and mature clusters in tSNE space
+Calculate silhoutette scores for each point in the immature and mature clusters in tSNE space. The median silhouette score is reported.
+
 ```{r}
 m.dist.matrix <- dist(x = Embeddings(mature, reduction = "tsne"))
 m.clusters <- mature$orig_ID
@@ -232,11 +289,5 @@ i.dist.matrix <- dist(x = Embeddings(immature, reduction = "tsne"))
 i.clusters <- immature$orig_ID
 i.sil <- silhouette(x = as.numeric(x = as.factor(x = i.clusters)), dist = i.dist.matrix)
 print(c("Immature silhouette score: ", median(i.sil[,3])))
-```
-
-Save immature and mature objects
-```{r}
-saveRDS(mature, "../Objects2020/mature_zFish_object.rds")
-saveRDS(immature, "../Objects2020/immature_zFish_object.rds")
 ```
 
