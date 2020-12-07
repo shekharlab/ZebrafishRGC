@@ -1,0 +1,91 @@
+---
+title: "Zebrafish RGC Visualization Tutorial"
+output: html_notebook
+---
+
+## Loading libraries and objects
+
+First step is to install Seurat. This step only needs to be done once per machine. Once Seurat has been installed, it only needs to be loaded for future use.
+```{r}
+# Install Seurat from CRAN repository
+install.packages('Seurat')
+
+# If the above option doesn't work, try downloading from Github.
+install.packages("devtools")
+library(devtools)
+install_github("satijalab/seurat", ref = REF)
+```
+
+Next, the libraries need to be loaded.
+Seurat - library for processing scRNA-seq data. Both the adult and larva are stored as Seurat objects.
+ggplot2 - library useful for general plotting
+```{r}
+library(Seurat)
+library(ggplot2)
+```
+
+Finally, the objects need to be loaded before visualizing them.The object files are R data objects, so using the command "readRDS" loads the objects. The final R data objects are available in this Google Drive folder: https://drive.google.com/drive/folders/1hrzdSCaBWHxlWq41ViZNG85qNSJOBgyV?usp=sharing 
+```{r}
+# You will likely need to change the file path to indicate where the files are located
+adult <- readRDS("../Objects2020/Final Objects/adult_zFish_FINAL.rds")
+larva <- readRDS("../Objects2020/Final Objects/larva_zFish_FINAL.rds")
+```
+
+## Basic object architecture
+The objects themselves contain the raw counts, processed counts, and metadata for each cell. Note that there are two metadata columns that contain the same information: dendro_order and clusterID. The difference is how they are factored. This comes into play later with graphing. 
+```{r}
+# Raw counts are stored in object@assays$RNA
+adult@assays$RNA
+larva@assays$RNA
+# Metadata, including the batch number, quality control metrics such as the number of counts and features, and cluster number are stored in object@meta.data 
+head(adult@meta.data)
+head(larva@meta.data)
+```
+
+## Visualization
+
+# Dot Plots
+Dot plots are extremely useful for visualizing gene expression in each cluster. The two required inputs are a Seurat object and a list of features to plot. It is often useful to include the command " + RotatedAxis()" to rotate the names of the genes, especially if you are plotting many genes. The plots are ggplot objects, so normal ggplot commands apply here as well. 
+```{r}
+sample_features = c("eomesa", "tbr1b", "mafaa", "neurod1")
+DotPlot(adult, features = sample_features) + RotatedAxis() + ggtitle("Sample Dot Plot")
+```
+
+There are a variety of tunable plotting parameters in DotPlot. By default, clusters are plotted according by their order in the dendrogram. This is because the default ident for these objects is "dendro_order". Another metadata column, clusterID, contains the same information but the clusters are factored numerically. By setting group.by = "clusterID", clusters will be plotted numerically instead.
+```{r}
+DotPlot(adult, features = sample_features, group.by = "clusterID") + RotatedAxis()
+```
+
+If you are looking at lowly expressed genes, it may be helpful to adjust the scale. This can be done by adjusting the scale.max parameter. This parameter caps the percent expression at a specified value.
+```{r}
+DotPlot(adult, features = sample_features, scale.max = 20) + RotatedAxis()
+```
+
+There are many other parameters for these functions that allow you to manipulate the color of the dots, the scaling of average expression, the minimum dot size that is plotted, and more. Type in help(DotPlot) to pull up the full function documentation for additional information about parameters.
+
+# Feature Plots
+
+Feature plots are another way of visualizing gene information. Feature plots are DimPlots with the cells colored by gene expression. To begin, let's look at DimPlot:
+
+```{r}
+DimPlot(adult, reduction = "tsne")
+```
+
+Note that by default, DimPlot attempts to plot using the UMAP reduction, then tSNE, then PCA. All figures are based off of the tSNE reduction, so be sure to change this parameter when plotting. 
+To include the cluster labels on the plot, the parameter "label" must be set to TRUE.
+
+```{r}
+DimPlot(adult, reduction = "tsne", label = TRUE)
+```
+
+The FeaturePlot command is similar to the DimPlot command. However, at least one feature must be specified.
+```{r}
+FeaturePlot(adult, reduction = "tsne", label = TRUE, features = "eomesa")
+```
+
+Specifying multiple features generates separate feature plots. 
+```{r}
+FeaturePlot(adult, reduction = "tsne", features = c("eomesa", "tbr1b", "mafaa", "neurod2"))
+```
+
+Similarly, there are many other parameters for these functions that allow you to further manipulate the color, scaling, and size of the dots. Type in help(FeaturePlot) to pull up the full function documentation for additional information about parameters.
