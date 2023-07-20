@@ -99,6 +99,19 @@ ShannonEntropy = function(vector, threshold = 0){
   return(2^Hx)
 }
 
+SimpsonIndex = function(table, invert = FALSE){
+  table <- as.array(table)
+  denom = sum(table) * (sum(table) - 1)
+  numer = sum(table * (table - 1))
+  index = (numer / denom)
+  if (invert){
+    return(1 / index)
+  }
+  else{
+    return(index)
+  }
+}
+
 #' Calculate the Occupation Number for a vector
 #'
 #' @param vector 
@@ -170,12 +183,12 @@ FindUniqueMarkers = function(object, markers, DEgenes_to_check = 30, min_percent
 #' @examples
 #' ExpressionByCluster(object = pbmc, gene = "LTB")
 ExpressionByCluster = function(object, gene, threshold = 0){
-  num_idents <- length(levels(Idents(object)))
-  per_express <- lapply(1:num_idents, function(x) tfPercentExpression(object, clusID = x, tf=gene, threshold = threshold))
-  per_express_mat <- matrix(unlist(per_express), ncol=num_idents, dimnames = list(gene, 1:num_idents))
+  idents <- levels(Idents(object))
+  num_idents = length(idents)
+  per_express <- lapply(idents, function(x) tfPercentExpression(object, clusID = x, tf=gene, threshold = threshold))
+  per_express_mat <- matrix(unlist(per_express), ncol=num_idents, dimnames = list(gene, idents))
   return(per_express_mat)
 }
-
 
 #' Simplified workflow for clustering a Seurat object
 #'
@@ -190,9 +203,20 @@ ExpressionByCluster = function(object, gene, threshold = 0){
 #' @param elbow Boolean indicating whether to show an Elbow Plot for better selection of numPCs
 #'
 #' @return A clustered Seurat object with tSNE and UMAP embeddings
-ClusterSeurat = function(object, nfeatures = 2000, numPCs = 30, normalization.method = "LogNormalize", scale.factor = 10000, selection.method = "vst",  scale.all = FALSE,  cluster_resolution = .5, elbow = FALSE){
-  object <- NormalizeData(object, normalization.method = normalization.method, scale.factor = scale.factor)
-  object <- FindVariableFeatures(object, selection.method = selection.method, nfeatures = nfeatures)
+ClusterSeurat = function(object, nfeatures = 2000, numPCs = 30, normalization.method = "LogNormalize", scale.factor = 10000, selection.method = "vst",  scale.all = FALSE,  cluster_resolution = .5, elbow = FALSE, integrate.by = NULL){
+  if(!is.null(integrate.by)){
+    obj.list <- SplitObject(object, split.by = integrate.by)
+    rm(object)
+    for (i in 1:length(obj.list)) {
+      obj.list[[i]] <- NormalizeData(obj.list[[i]], verbose = FALSE)
+      obj.list[[i]] <- FindVariableFeatures(obj.list[[i]], selection.method = selection.method, nfeatures = nfeatures, verbose = FALSE)
+    }
+    obj.anchors <- FindIntegrationAnchors(object.list = obj.list)
+    object <- IntegrateData(anchorset = obj.anchors)
+    DefaultAssay(object) <- "integrated"
+  }
+  object <- NormalizeData(object)
+  object <- FindVariableFeatures(object)
   if(scale.all){
     all.genes <- rownames(object)
     object <- ScaleData(object, features = all.genes)
@@ -200,7 +224,7 @@ ClusterSeurat = function(object, nfeatures = 2000, numPCs = 30, normalization.me
   else{
     object <- ScaleData(object)
   }
-
+  
   object <- RunPCA(object)
   if(elbow){
     ElbowPlot(object, ndims = 50)
@@ -226,18 +250,18 @@ ClusterSeurat = function(object, nfeatures = 2000, numPCs = 30, normalization.me
 #'
 #' @examples
 #' adult_to_larva <- BuildConfusionMatrix(larva, adult, model = larva.model)
-BuildConfusionMatrix = function(train, test, model, scale.by.model = FALSE ){
-  genes.use <- toupper(model$bst_model$feature_names)
-  train <- UpperCase_genes(train)
-  test <- UpperCase_genes(test)
-  train_data = train@assays$RNA@data[genes.use,]
-  train_id = Idents(train)
+BuildConfusionMatrix = function(test, train, model, scale.by.model = FALSE ){
+  # genes.use <- toupper(model$bst_model$feature_names)
+  genes.use <- model$bst_model$feature_names
+  # test <- UpperCase_genes(test)
   test_data = test@assays$RNA@data[genes.use,]
   test_data = as.matrix(test_data)
   test_id = Idents(test)
+  train_id = Idents(train)
   
   # Use trained model to predict on test data
-  numberOfClasses = length(levels(train_id))
+  numberOfClasses <- model$bst_model$params$num_class
+
   test_xgb = t(test_data[genes.use,])
   if (scale.by.model){
     test_xgb = scale(test_xgb, center=model$scale_mean, scale = model$scale_var)
@@ -266,14 +290,15 @@ BuildConfusionMatrix = function(train, test, model, scale.by.model = FALSE ){
 #' Trains a xgboost classification model
 #'
 #' @param object A Seurat object to learn
-#' @param training_genes A vector of training genes
+#' @param training_genes A vector of training genes.
 #' @param train_ident Which ident for the model to learn. 
 #' @param do.scale Boolean value indicating whether to scale the data or not.
 #'
 #' @return An xgboost model
 TrainModel = function(object, training_genes, train_ident = NULL, do.scale = TRUE){
-  object <- UpperCase_genes(object)
-  training_genes <- toupper(training_genes)
+  library(reshape2)
+  # object <- UpperCase_genes(object)
+  # training_genes <- toupper(training_genes)
   train_data = object@assays$RNA@data[training_genes,]
   if(is.null(train_ident)){
     train_id = Idents(object)
@@ -311,11 +336,137 @@ DiagonalizeGenes <- function(genes, object, increasing = FALSE){
 #' Constructs a dendrogram and creates a new column in the metadata that is factored according to the dendrogram
 #'
 #' @param object A Seurat object with a new column "dendro_order" that is factored by a dendrogram
-DendroOrder <- function(object){
+DendroOrder <- function(object, nfeatures = 500){
+  object <- FindVariableFeatures(object, selection.method = "vst", nfeatures = nfeatures)
+  object <- BuildClusterTree(object)
   tree_obj = object@tools$BuildClusterTree
-  left_clusts = Seurat:::GetLeftDescendants(tree_obj, length(levels(object@meta.data$clusterID))+1)
-  right_clusts = Seurat:::GetRightDescendants(tree_obj, length(levels(object@meta.data$clusterID))+1)
+  
+  if(0 %in% levels(Idents(object))){
+    left_clusts = Seurat:::GetLeftDescendants(tree_obj, length(levels(Idents(object)))+1) - 1 
+    right_clusts = Seurat:::GetRightDescendants(tree_obj, length(levels(Idents(object)))+1) - 1
+  }
+  else{
+    left_clusts = Seurat:::GetLeftDescendants(tree_obj, length(levels(Idents(object)))+1)
+    right_clusts = Seurat:::GetRightDescendants(tree_obj, length(levels(Idents(object)))+1)
+  }
+  
   clust_order = c(left_clusts, right_clusts)
-  object@meta.data$dendro_order = factor(object@meta.data$clusterID, levels = clust_order)
+  object@meta.data$dendro_order = NaN
+  object@meta.data$dendro_order = factor(Idents(object), levels = clust_order)
   return(object)
+}
+
+
+ConvertBarcodes <- function(object){
+  barcode <- function(string){
+    code <- strsplit(string, c(":"))
+    barcode <- strsplit(code[[1]][2], "x")
+    return (paste0(barcode[[1]][1], "-1"))
+  }
+  new_names <- unlist(lapply(colnames(object), barcode))
+  colnames(object) <- new_names
+  rownames(object@meta.data) <- new_names
+  return(object)
+}
+
+IntegrateObject <- function(object, split.by, dims = 40, nfeatures = 1500, selection.method = "vst"){
+  # Split object
+  object.list <- SplitObject(object, split.by = split.by)
+  # Normalize each dataset and find variable features
+  for (i in 1:length(object.list)) {
+    object.list[[i]] <- NormalizeData(object.list[[i]], verbose = FALSE)
+    object.list[[i]] <- FindVariableFeatures(object.list[[i]], selection.method = selection.method, 
+                                            nfeatures = nfeatures, verbose = FALSE)
+  }
+  # Find Integration anchors
+  object.anchors <- FindIntegrationAnchors(object.list = object.list, dims = 1:dims)
+  # Integrate Data
+  object.integrated <- IntegrateData(anchorset = object.anchors, dims = 1:dims)
+  return(object.integrated)
+}
+
+
+# Define functions 
+ReadCountMatrix = function(filename, cell_file, gene_file){
+  library(reticulate)
+  np <- import("numpy")
+  cell_names <- read.csv(cell_file)
+  cell_names <- cell_names$X
+  
+  gene_names <- read.csv(gene_file)
+  gene_names <- rownames(gene_names)
+  py_mat <- np$load(filename, allow_pickle = TRUE)
+  gene_mat <- py_mat[[1]][0:(length(cell_names)-1)]
+  
+  rownames(gene_mat) <- cell_names
+  colnames(gene_mat) <- gene_names
+  gene_mat <- t(gene_mat)
+  return(gene_mat)
+}
+
+
+#' Merges cluster identities. Saves new cluster identities in "seurat_clusters" metadata column.
+#'
+#' @param object A Seurat object 
+#' @param idents A list of cluster identities to merge
+#' @param meta.data The metadata column to pull the idents from
+MergeClusters <- function(object, idents, meta.data = "seurat_clusters", refactor = TRUE){
+  Idents(object) <- meta.data
+  merge_cells <- c()
+  for (i in idents){
+    merge_cells <- append(merge_cells, WhichCells(object, idents = i))
+  }
+  object@meta.data[merge_cells,]$seurat_clusters <- head(idents, 1)
+  if(refactor){
+    object@meta.data$seurat_clusters <- droplevels(object@meta.data$seurat_clusters)
+    levels(object@meta.data$seurat_clusters) = 1:length(levels(object@meta.data$seurat_clusters))
+  }
+  Idents(object) <- "seurat_clusters"
+  return(object)
+}
+
+#' Removes cluster identities and refactors remaining clusters in "seurat_clusters" metadata column.
+#'
+#' @param object A Seurat object 
+#' @param idents A list of cluster identities to remove from the data
+#' @param meta.data The metadata column to pull the idents from
+DropClusters <- function(object, idents, meta.data = "seurat_clusters", refactor = TRUE){
+  Idents(object) <- meta.data
+  cells.remove <- WhichCells(object, idents= idents)
+  object <- subset(object, cells = setdiff(colnames(object), cells.remove))
+  
+  if(refactor){
+    object@meta.data$seurat_clusters <- droplevels(object@meta.data$seurat_clusters)
+    levels(object@meta.data$seurat_clusters) = 1:length(levels(object@meta.data$seurat_clusters))
+  }
+  Idents(object) <- "seurat_clusters"
+  return(object)
+}
+
+PrctCellExpringGene <- function(object, genes, group.by = "all"){
+  if(group.by == "all"){
+    prct = unlist(lapply(genes,calc_helper, object=object))
+    result = data.frame(Markers = genes, Cell_proportion = prct)
+    return(result)
+  }
+  
+  else{        
+    list = SplitObject(object, group.by)
+    factors = names(list)
+    
+    results = lapply(list, PrctCellExpringGene, genes=genes)
+    for(i in 1:length(factors)){
+      results[[i]]$Feature = factors[i]
+    }
+    combined = do.call("rbind", results)
+    return(combined)
+  }
+}
+
+calc_helper <- function(object,genes){
+  counts = object[['RNA']]@counts
+  ncells = ncol(counts)
+  if(genes %in% row.names(counts)){
+    sum(counts[genes,]>0)/ncells
+  }else{return(NA)}
 }

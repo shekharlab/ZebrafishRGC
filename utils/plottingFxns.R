@@ -27,6 +27,7 @@ basic_dotplot = function(object,genes.use=NULL, use.counts=FALSE, ident.use = NU
                          clusters_as_rows = TRUE, alpha.use = 1,
                          col.low="white", col.high="red",
                          max.size=10, title.use=NULL) {
+  library(reshape2)
   if (use.counts){
     data.use = object@assays$RNA@counts
     data.use = data.use[intersect(genes.use, rownames(data.use)),]
@@ -262,8 +263,8 @@ MakePrettyConfusionMatrix = function(C, xlab.use = "Training clusters", ylab.use
 PlotClusterSize = function(object){
   num_cells <- dim(object@meta.data)[1]
   cluster_percent <- vector()
-  for(i in levels(object@meta.data$clusterID)){
-    clus_cells <- length(which(object@meta.data$clusterID == i))
+  for(i in levels(Idents(object))){
+    clus_cells <- length(which(object, idents = i))
     cluster_percent[i] <- clus_cells / num_cells * 100
   }
   barplot(cluster_percent, xlab = "Cluster ID", ylab = "Percentage of Cells [%]")
@@ -319,3 +320,11 @@ PlotUniqueMarkers = function(object, markers, edits = FALSE, plot = TRUE){
   return(plot_markers)
 }
 
+TopMarkers = function(markers, num_markers = 1, assay = "RNA"){
+  plot_markers <- NULL
+  for(i in unique(markers$cluster)){
+    top_marks <- head(subset(markers, cluster == i),num_markers)$gene
+    plot_markers <-  c(plot_markers, top_marks)
+  }
+  return(unique(plot_markers))
+}
